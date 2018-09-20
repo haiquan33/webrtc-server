@@ -15,7 +15,7 @@ var httpsOptions = {
   cert: fs.readFileSync('./fake-keys/certificate.pem')
 };
 let isLocal = process.env.PORT == null;
-var serverPort = (process.env.PORT  || 4443);
+var serverPort = (process.env.PORT || 4443);
 var server = null;
 if (isLocal) {
   //  server = require('https').createServer(httpsOptions, app);
@@ -26,14 +26,18 @@ if (isLocal) {
 var io = require('socket.io')(server);
 
 let socketIdToNames = {};
+let socketIDtoPhoneNo = {};
+let currentCallingRoom = {}
+// current phone number that send call request to this number
+let CurrentReqPhoneNumberto = {};
 //------------------------------------------------------------------------------
 //  Serving static files
-app.get('/', function(req, res){
+app.get('/', function (req, res) {
   console.log('get /');
   res.sendFile(__dirname + '/index.html');
 });
 
-app.get('/draw', function(req, res){
+app.get('/draw', function (req, res) {
   console.log('get /');
   res.sendFile(__dirname + '/draw.html');
 });
@@ -42,7 +46,7 @@ app.use('/style', express.static(path.join(__dirname, 'style')));
 app.use('/script', express.static(path.join(__dirname, 'script')));
 app.use('/image', express.static(path.join(__dirname, 'image')));
 
-server.listen(serverPort, function(){
+server.listen(serverPort, function () {
   console.log('Rewebrtc-server is up and running at %s port', serverPort);
   if (isLocal) {
     open('http://localhost:' + serverPort)
@@ -64,11 +68,14 @@ function socketIdsInRoom(roomId) {
   }
 }
 
-io.on('connection', function(socket){
+io.on('connection', function (socket) {
   console.log('Connection');
-  socket.on('disconnect', function(){
+  socket.on('disconnect', function () {
     console.log('Disconnect');
+    delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]];
     delete socketIdToNames[socket.id];
+    delete currentCallingRoom[socketIDtoPhoneNo[socket.id]]
+    delete socketIDtoPhoneNo[socket.id]
     if (socket.room) {
       var room = socket.room;
       io.to(room).emit('leave', socket.id);
@@ -79,7 +86,7 @@ io.on('connection', function(socket){
   /**
    * Callback: list of {socketId, name: name of user}
    */
-  socket.on('join', function(joinData, callback){ //Join room
+  socket.on('join', function (joinData, callback) { //Join room
     let roomId = joinData.roomId;
     let name = joinData.name;
     socket.join(roomId);
@@ -102,14 +109,68 @@ io.on('connection', function(socket){
     console.log('Join: ', joinData);
   });
 
-  socket.on('exchange', function(data){
+
+  //register room
+  socket.on('register', function (data) {
+    socket.join(data.phoneNumber);
+    socketIDtoPhoneNo[socket.id] = data.phoneNumber;
+    console.log("register", socketIDtoPhoneNo[socket.id])
+  })
+
+  //receive call request
+  socket.on('requestCall', function (data) {
+
+    //if there is no current phone number request call to this number or this number not in any call
+    console.log(CurrentReqPhoneNumberto[data.phoneNumber],currentCallingRoom[data.phoneNumber])
+    if (currentCallingRoom[data.phoneNumber] == null) {
+      if (CurrentReqPhoneNumberto[data.phoneNumber] == null) {
+
+        io.to(data.phoneNumber).emit('receiveCall', { phoneNumber: socketIDtoPhoneNo[socket.id] });
+        CurrentReqPhoneNumberto[data.phoneNumber] = socketIDtoPhoneNo[socket.id];
+        console.log(CurrentReqPhoneNumberto[data.phoneNumber], 'call', data.phoneNumber)
+      }
+    }
+
+  })
+
+  socket.on('hangup', function () {
+    io.to(currentCallingRoom[socketIDtoPhoneNo[socket.id]]).emit('leave', socket.id);
+
+
+
+    let roomName = currentCallingRoom[socketIDtoPhoneNo[socket.id]];
+    for (var socket_id in socketIdsInRoom(roomName)) {
+      delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket_id]];
+      delete currentCallingRoom[socketIDtoPhoneNo[socket_id]];
+    }
+    socket.leave(roomName);
+
+  })
+
+  //accept call request
+  socket.on('acceptCall', function () {
+    let roomName = CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]] + '_to_' + socketIDtoPhoneNo[socket.id];
+    currentCallingRoom[socketIDtoPhoneNo[socket.id]] = roomName;
+    currentCallingRoom[CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]] = roomName;
+    
+
+    io.to(CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]).emit('CallAccepted', { roomName });
+    io.to(socketIDtoPhoneNo[socket.id]).emit('CallAccepted', { roomName });
+
+    delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]];
+
+
+  })
+
+
+  socket.on('exchange', function (data) {
     console.log('exchange', data);
     data.from = socket.id;
     var to = io.sockets.connected[data.to];
     to.emit('exchange', data);
   });
 
-  socket.on("count", function(roomId, callback) {
+  socket.on("count", function (roomId, callback) {
     var socketIds = socketIdsInRoom(roomId);
     callback(socketIds.length);
   });

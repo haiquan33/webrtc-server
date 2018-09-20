@@ -5,7 +5,7 @@
  * Feb 12, 2017
  */
 
-const VIDEO_CONFERENCE_ROOM = "video_conference";
+const VIDEO_CONFERENCE_ROOM = "123_to_124";
 
 //Load selfView
 loadLocalStream(true); //muted
