@@ -30,6 +30,7 @@ let socketIDtoPhoneNo = {};
 let currentCallingRoom = {}
 // current phone number that send call request to this number
 let CurrentReqPhoneNumberto = {};
+let CurrentReqPhoneNumberfrom = {};
 //------------------------------------------------------------------------------
 //  Serving static files
 app.get('/', function (req, res) {
@@ -68,11 +69,26 @@ function socketIdsInRoom(roomId) {
   }
 }
 
+//delete all variable that held data of the call from A to B
+
+//A call B => CurrentReqPhoneNumberto[B]=A    CurrentReqPhoneNumberfrom[A]=B
+function deleteCallTrace(numberA, numberB) {
+  delete CurrentReqPhoneNumberfrom[numberA];
+  delete CurrentReqPhoneNumberto[numberB];
+
+
+
+
+  delete currentCallingRoom[numberA];
+  delete currentCallingRoom[numberB];
+}
+
 io.on('connection', function (socket) {
   console.log('Connection');
   socket.on('disconnect', function () {
     console.log('Disconnect');
     delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]];
+    delete CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]];
     delete socketIdToNames[socket.id];
     delete currentCallingRoom[socketIDtoPhoneNo[socket.id]]
     delete socketIDtoPhoneNo[socket.id]
@@ -117,48 +133,81 @@ io.on('connection', function (socket) {
     console.log("register", socketIDtoPhoneNo[socket.id])
   })
 
+
+  //unregister room
+  socket.on('unregister', function () {
+    console.log("unregister", socketIDtoPhoneNo[socket.id])
+    socket.leave(socketIDtoPhoneNo[socket.id]);
+    delete socketIDtoPhoneNo[socket.id];
+  })
+
   //receive call request
   socket.on('requestCall', function (data) {
 
     //if there is no current phone number request call to this number or this number not in any call
-    console.log(CurrentReqPhoneNumberto[data.phoneNumber],currentCallingRoom[data.phoneNumber])
+    console.log(CurrentReqPhoneNumberto[data.phoneNumber], currentCallingRoom[data.phoneNumber])
     if (currentCallingRoom[data.phoneNumber] == null) {
       if (CurrentReqPhoneNumberto[data.phoneNumber] == null) {
-
-        io.to(data.phoneNumber).emit('receiveCall', { phoneNumber: socketIDtoPhoneNo[socket.id] });
-        CurrentReqPhoneNumberto[data.phoneNumber] = socketIDtoPhoneNo[socket.id];
-        console.log(CurrentReqPhoneNumberto[data.phoneNumber], 'call', data.phoneNumber)
+        if (CurrentReqPhoneNumberfrom[data.phoneNumber] == null) {
+          io.to(data.phoneNumber).emit('receiveCall', { phoneNumber: socketIDtoPhoneNo[socket.id] });
+          CurrentReqPhoneNumberto[data.phoneNumber] = socketIDtoPhoneNo[socket.id];
+          CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]] = data.phoneNumber;
+          console.log(CurrentReqPhoneNumberto[data.phoneNumber], 'call', data.phoneNumber)
+        }
       }
     }
 
   })
 
   socket.on('hangup', function () {
+
     io.to(currentCallingRoom[socketIDtoPhoneNo[socket.id]]).emit('leave', socket.id);
 
 
 
     let roomName = currentCallingRoom[socketIDtoPhoneNo[socket.id]];
-    for (var socket_id in socketIdsInRoom(roomName)) {
-      delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket_id]];
-      delete currentCallingRoom[socketIDtoPhoneNo[socket_id]];
-    }
+
+    delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]];
+    delete CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]];
+    delete currentCallingRoom[socketIDtoPhoneNo[socket.id]];
+
     socket.leave(roomName);
 
   })
+
+  socket.on('decline', function () {
+    console.log("Declined");
+    io.to(socketIDtoPhoneNo[socket.id]).emit('Callcancelled');
+    if (CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]]) {
+      io.to(CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]]).emit('Callcancelled');
+      deleteCallTrace(socketIDtoPhoneNo[socket.id], CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]])
+
+    }
+    if (CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]) {
+      io.to(CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]).emit('Callcancelled');
+      deleteCallTrace(CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]], socketIDtoPhoneNo[socket.id])
+    }
+
+
+
+  })
+
+
+
+
 
   //accept call request
   socket.on('acceptCall', function () {
     let roomName = CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]] + '_to_' + socketIDtoPhoneNo[socket.id];
     currentCallingRoom[socketIDtoPhoneNo[socket.id]] = roomName;
     currentCallingRoom[CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]] = roomName;
-    
+
 
     io.to(CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]]).emit('CallAccepted', { roomName });
     io.to(socketIDtoPhoneNo[socket.id]).emit('CallAccepted', { roomName });
 
     delete CurrentReqPhoneNumberto[socketIDtoPhoneNo[socket.id]];
-
+    delete CurrentReqPhoneNumberfrom[socketIDtoPhoneNo[socket.id]];
 
   })
 
@@ -176,3 +225,12 @@ io.on('connection', function (socket) {
   });
 
 });
+
+
+
+
+// // Order of call process  
+// register: join a socket id in room name same as its number
+// requestcall : send a call request to other number
+// hang up : hang up a processing call
+// decline: cancel an incomming or requesting  call 
