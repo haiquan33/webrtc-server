@@ -5,6 +5,9 @@
  * Feb 12, 2017
  */
 
+let uid = require('uid');
+let moment = require('moment')
+
 var express = require('express');
 var app = express();
 var path = require('path');
@@ -18,8 +21,8 @@ let isLocal = process.env.PORT == null;
 var serverPort = (process.env.PORT || 4443);
 var server = null;
 if (isLocal) {
-  //  server = require('https').createServer(httpsOptions, app);
-  server = require('https').createServer(httpsOptions, app);
+  server = require('http').createServer(app);
+  //server = require('https').createServer(httpsOptions, app);
 } else {
   server = require('http').createServer(app);
 }
@@ -31,6 +34,13 @@ let currentCallingRoom = {}
 // current phone number that send call request to this number
 let CurrentReqPhoneNumberto = {};
 let CurrentReqPhoneNumberfrom = {};
+
+
+//Mess list
+let MessList = {};
+
+
+
 //------------------------------------------------------------------------------
 //  Serving static files
 app.get('/', function (req, res) {
@@ -131,6 +141,12 @@ io.on('connection', function (socket) {
     socket.join(data.phoneNumber);
     socketIDtoPhoneNo[socket.id] = data.phoneNumber;
     console.log("register", socketIDtoPhoneNo[socket.id])
+
+    //send unreceive mess to this phone no
+    if (MessList[data.phoneNumber])
+    io.to(data.phoneNumber).emit("MessComming",{Mess:MessList[data.phoneNumber]})
+
+
   })
 
 
@@ -224,7 +240,54 @@ io.on('connection', function (socket) {
     callback(socketIds.length);
   });
 
+
+
+  //-------------- MESS Function
+  socket.on("MessSend", function (data) {
+    if (MessList[data.toNo]) {
+      MessList[data.toNo].map((item) => {
+        if (item.withUserPhone != data.fromNo) return item;
+        item.messages.push({
+          id: uid(),
+          type: 'in',
+          time: moment().format(),
+          text: data.mess
+        })
+      })
+    }
+    else {
+      MessList[data.toNo] = [];
+      MessList[data.toNo].push({
+        withUserPhone: data.fromNo,
+        messages: [
+          {
+            id: uid(),
+            type: 'in',
+            time: moment().format(),
+            text: data.mess
+          }
+        ]
+      })
+    }
+   
+    console.log(MessList)
+    //emit mess to phone number
+    io.to(data.toNo).emit("MessComming",{fromNo:data.fromNo,MessList:MessList[data.toNo]})
+
+
+  });
+
+  //Client tell that mess saved, we should clear un receive messlist of this phone number
+  socket.on("MessSaved",function(){
+            delete MessList[socketIDtoPhoneNo[socket.id]];
+            console.log("Delete messlist of ",socketIDtoPhoneNo[socket.id]);
+  })
+
+
 });
+
+
+
 
 
 
