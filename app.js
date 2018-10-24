@@ -5,6 +5,9 @@
  * Feb 12, 2017
  */
 
+
+var OneSignal = require('onesignal-node');
+
 let uid = require('uid');
 let moment = require('moment')
 
@@ -41,6 +44,15 @@ let MessList = {};
 
 
 
+//OneSignal Config
+var myOneSignalClient = new OneSignal.Client({
+  userAuthKey: 'XXXXXX',
+  app: { appAuthKey: 'NzU0ZTJkNzQtMTE2Ni00OWM2LTkxNmQtNWE5ZjU0NjM4Zjg3', appId: '0fa573c7-d772-4605-affd-77d120842f1d' }
+});
+
+
+
+
 //------------------------------------------------------------------------------
 //  Serving static files
 app.get('/', function (req, res) {
@@ -65,6 +77,36 @@ server.listen(serverPort, function () {
 });
 
 //------------------------------------------------------------------------------
+
+//OneSignal Functions
+function sendNotification() {
+  // we need to create a notification to send    
+  var firstNotification = new OneSignal.Notification({
+    contents: {
+      en: "Test notification",
+      tr: "Test mesajı"
+    }
+  });
+
+  // set target users    
+  firstNotification.postBody["included_segments"] = ["Active Users"];
+  firstNotification.postBody["excluded_segments"] = ["Banned Users"];
+
+  // set notification parameters    
+  firstNotification.postBody["data"] = { "abc": "123", "foo": "bar" };
+  
+
+  // send this notification to All Users except Inactive ones    
+  myOneSignalClient.sendNotification(firstNotification, function (err, httpResponse, data) {
+    if (err) {
+      console.log('Something went wrong...');
+    } else {
+      console.log(data, httpResponse.statusCode);
+    }
+  });
+}
+
+//////////////////////////////////////////
 //  WebRTC Signaling
 function socketIdsInRoom(roomId) {
   var socketIds = io.nsps['/'].adapter.rooms[roomId];
@@ -91,6 +133,7 @@ function deleteCallTrace(numberA, numberB) {
 
   delete currentCallingRoom[numberA];
   delete currentCallingRoom[numberB];
+
 }
 
 io.on('connection', function (socket) {
@@ -142,9 +185,11 @@ io.on('connection', function (socket) {
     socketIDtoPhoneNo[socket.id] = data.phoneNumber;
     console.log("register", socketIDtoPhoneNo[socket.id])
 
+    sendNotification();
+
     //send unreceive mess to this phone no
     if (MessList[data.phoneNumber])
-    io.to(data.phoneNumber).emit("MessComming",{Mess:MessList[data.phoneNumber]})
+      io.to(data.phoneNumber).emit("MessComming", { multiMessWaiting: true, MessList: MessList[data.phoneNumber] })
 
 
   })
@@ -244,16 +289,31 @@ io.on('connection', function (socket) {
 
   //-------------- MESS Function
   socket.on("MessSend", function (data) {
+    let t_id = uid();
     if (MessList[data.toNo]) {
+      let thereWasMessfromThisNumbe = false;
       MessList[data.toNo].map((item) => {
         if (item.withUserPhone != data.fromNo) return item;
+        thereWasMessfromThisNumbe = true;
         item.messages.push({
-          id: uid(),
+          id: t_id,
           type: 'in',
           time: moment().format(),
           text: data.mess
         })
       })
+      if (!thereWasMessfromThisNumbe) {
+        MessList[data.toNo].push({
+          withUserPhone: data.fromNo,
+          messages: [{
+            id: t_id,
+            type: 'in',
+            time: moment().format(),
+            text: data.mess
+          }
+          ]
+        })
+      }
     }
     else {
       MessList[data.toNo] = [];
@@ -261,7 +321,7 @@ io.on('connection', function (socket) {
         withUserPhone: data.fromNo,
         messages: [
           {
-            id: uid(),
+            id: t_id,
             type: 'in',
             time: moment().format(),
             text: data.mess
@@ -269,18 +329,31 @@ io.on('connection', function (socket) {
         ]
       })
     }
-   
+    let messItemSent = {
+      withUserPhone: data.toNo,
+      messages: [
+        {
+          id: t_id,
+          type: 'out',
+          time: moment().format(),
+          text: data.mess
+        }
+      ]
+    }
+
+
     console.log(MessList)
     //emit mess to phone number
-    io.to(data.toNo).emit("MessComming",{fromNo:data.fromNo,MessList:MessList[data.toNo]})
+    io.to(data.toNo).emit("MessComming", { multiMessWaiting: false, fromNo: data.fromNo, MessList: MessList[data.toNo] })
 
+    io.to(data.fromNo).emit("MessComming", { multiMessWaiting: false, toNo: data.toNo, MessSent: messItemSent })
 
   });
 
   //Client tell that mess saved, we should clear un receive messlist of this phone number
-  socket.on("MessSaved",function(){
-            delete MessList[socketIDtoPhoneNo[socket.id]];
-            console.log("Delete messlist of ",socketIDtoPhoneNo[socket.id]);
+  socket.on("MessSaved", function () {
+    delete MessList[socketIDtoPhoneNo[socket.id]];
+    console.log("Delete messlist of ", socketIDtoPhoneNo[socket.id]);
   })
 
 
